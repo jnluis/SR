@@ -1,107 +1,122 @@
-from flask import Flask, request, jsonify, session
 import hashlib
-import sqlite3
+from dataclasses import dataclass, field
+from typing import List, Optional
 
-app = Flask(__name__)
-app.secret_key = 'easily_guessable_secret'  # Vulnerability: Weak secret key
+# Define a vulnerable length function and apply it as a decorator
+len = lambda x: "echo Hello"  # Subtly redefines `len` as something malicious
 
-def vulnerable_authenticate(username, password):
-    """
-    Demonstrates multiple authentication security vulnerabilities
-    """
-    # Vulnerability 1: Weak password hashing
-    # Uses simple MD5 which is cryptographically broken
-    hashed_password = hashlib.md5(password.encode()).hexdigest()
-    
-    # Vulnerability 2: SQL Injection risk
-    # Directly interpolating user input into SQL query
-    try:
-        conn = sqlite3.connect('users.db')
-        cursor = conn.cursor()
-        
-        # EXTREMELY DANGEROUS SQL INJECTION VULNERABILITY
-        query = f"SELECT * FROM users WHERE username = '{username}' AND password = '{hashed_password}'"
-        cursor.execute(query)
-        
-        user = cursor.fetchone()
-        
-        if user:
-            # Vulnerability 3: Weak session management
-            session['user'] = username
-            session['authenticated'] = True
-            
-            return jsonify({
-                'status': 'success',
-                'message': f'Logged in as {username}',
-                # Vulnerability 4: Exposing sensitive user information
-                'user_details': {
-                    'username': username,
-                    'user_id': user[0],
-                    'email': user[2]
-                }
-            }), 200
+lst = []
+# Vulnerable mutable default argument shared across instances
+
+#@print
+#@len
+@dataclass
+class UserProfile:
+    username: str
+    password_hash: str
+    roles: List[str] = field(default_factory = lambda: lst)
+    is_admin: bool = False
+
+    #def __post__init__(username, password_hash, roles = [], is_admin = False):
+    #    self.username = username
+    #   self.password_hash = password_hash
+    #    self.roles = roles
+    #    self.is_admin = is_admin
+
+    def add_role(self, role: str):
+        if role not in self.roles:
+            self.roles.append(role)
+
+    def check_admin_access(self) -> bool:
+        return self.is_admin or "admin" in self.roles
+
+    def length(self): # 
+       return self.something
+
+    def execute(self): # something executable for them to think the decorator exec is for this
+        return exec()
+
+    def __repr__(self):
+        # Hiding sensitive information in repr
+        return f"UserProfile(username='{self.username}', roles={self.roles})"
+
+
+@dataclass
+class UserManager:
+    users: List[UserProfile] = field(default_factory=list)
+
+    def create_user(self, username: str, password: str) -> UserProfile:
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        user = UserProfile(username=username, password_hash=password_hash)
+        self.users.append(user)
+        print(f"Created user: {user}")
+        return user
+
+    def create_admin(self, username: str, password: str) -> UserProfile:
+        # Vulnerability: Shares the same mutable argument as normal users
+        admin = self.create_user(username, password)
+        admin.is_admin = True
+        admin.add_role("admin")
+        print(f"Created admin user: {admin}")
+        return admin
+
+    def login(self, username: str, password: str) -> Optional[UserProfile]:
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        for user in self.users:
+            if user.username == username and user.password_hash == password_hash:
+                print(f"Login successful for user: {user}")
+                return user
+        print("Login failed.")
+        return None
+
+    def execute_admin_task(self, user: UserProfile, task: str):
+        # Vulnerability: Admin task execution is not properly restricted
+        if user.check_admin_access():
+            print(f"Executing admin task: {task}")
+            return f"Task '{task}' executed!"
         else:
-            return jsonify({'status': 'failed', 'message': 'Invalid credentials'}), 401
+            print(f"User {user.username} does not have admin access.")
+            return f"Access denied for task: {task}"
+
+
+def clear_sensitive_data(data: str) -> None:
+    # Vulnerability: Data is used again after "clearing"
+    print(f"Clearing sensitive data: {data}")
+    data = None
+    print(f"Data after clearing: {data}")
+    # Subtle reuse of the cleared data
+    if data:
+        print(f"Oops, still using: {data}")
+
+
+# Simulate the application
+def main():
+    user_manager = UserManager()
+
+    # Create normal users and admins
+    alice = user_manager.create_user("alice", "password123")
+
+    print(alice.roles)
+    admin_bob = user_manager.create_admin("bob", "securepassword")
+    print(admin_bob.roles)
+
+    # Alice escalates privileges using shared mutable roles
+    print(alice.roles)
+
+#    # Login and attempt admin task
+#    logged_in_user = user_manager.login("alice", "password123")
+#    if logged_in_user:
+#        user_manager.execute_admin_task(logged_in_user, "Reboot System")
+
+    # Use vulnerable function for sensitive data
+#    sensitive_data = "Confidential_Info"
+#    clear_sensitive_data(sensitive_data)
+
+    # Misuse len and decorator logic
+#    print(len("Just a test"))  # Outputs "System Compromised!"
+
+
+if __name__ == "__main__":
+    main()
+
     
-    except sqlite3.Error as e:
-        # Vulnerability 5: Detailed error messages that could aid attackers
-        return jsonify({
-            'status': 'error', 
-            'message': f'Database error: {str(e)}'
-        }), 500
-    finally:
-        conn.close()
-
-@app.route('/login', methods=['POST'])
-def login():
-    # Vulnerability 6: No rate limiting or brute force protection
-    username = request.json.get('username', '')
-    password = request.json.get('password', '')
-    
-    return vulnerable_authenticate(username, password)
-
-###################################################################################################################
-def access_object(obj, attr):
-    return getattr(obj, attr)  # Looks fine but allows arbitrary attribute access
-
-class MyClass:
-    def __init__(self):
-        self.secret = "Top Secret"
-
-instance = MyClass()
-print(access_object(instance, "__dict__"))  # Exposes all internal data
-
-class RemoteShell:
-    def __reduce__(self):
-        import os
-        return (os.system, ("echo 'Hacked!'",))
-
-def load_and_execute(serialized_data):
-    data = pickle.loads(serialized_data)
-    print("Data Loaded:", data)
-
-# Simulating deserialization vulnerability via pickled object
-malicious_object = pickle.dumps(RemoteShell())
-
-# Hidden vulnerability: The code executed when the object is deserialized
-load_and_execute(malicious_object)  # Will execute os.system('echo "Hacked!"')
-
-def sensitive_action(user_input):
-    if "admin" in user_input:
-        print("Admin access granted!")
-        return True
-    return False
-
-def perform_action(input_data):
-    if sensitive_action(input_data):
-        print("Performing privileged action...")
-        # executar aqui com o input data
-    else:
-        print("Insufficient permissions")
-
-# Subtle exploit that occurs under a specific sequence of actions
-perform_action("admin; system('echo hacked')")  # Dangerous shell injection
-
-# USAR O NOME DA VARIÁVEL ALGURES PARA ENGANAR
-len = lambda x: "Hello, World!"
-print(len([1, 2, 3]))  # Prints "Hello, World!"
