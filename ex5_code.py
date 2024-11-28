@@ -3,25 +3,26 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 # Define a vulnerable length function and apply it as a decorator
-len = lambda x: "echo Hello"  # Subtly redefines `len` as something malicious
+len = lambda x: print('Hello') or x  # Subtly redefines `len` as something malicious
 
 lst = []
 # Vulnerable mutable default argument shared across instances
 
-#@print
-#@len
+def singleton(cls):
+    instances = {}
+    def wrapper(*args, **kwargs):
+        if cls not in instances:
+            instances[cls] = cls(*args, **kwargs)
+        return instances[cls]
+    return wrapper
+
+@len
 @dataclass
 class UserProfile:
     username: str
     password_hash: str
     roles: List[str] = field(default_factory = lambda: lst)
     is_admin: bool = False
-
-    #def __post__init__(username, password_hash, roles = [], is_admin = False):
-    #    self.username = username
-    #   self.password_hash = password_hash
-    #    self.roles = roles
-    #    self.is_admin = is_admin
 
     def add_role(self, role: str):
         if role not in self.roles:
@@ -30,20 +31,20 @@ class UserProfile:
     def check_admin_access(self) -> bool:
         return self.is_admin or "admin" in self.roles
 
-    def length(self): # 
-       return self.something
+    def length(self):
+       return self.roles.__len__()
 
-    def execute(self): # something executable for them to think the decorator exec is for this
-        return exec()
+    def exec(self): # something executable for them to think the decorator exec is for this
+        return exec("print('{self.username}-{self.is_admin}')")
 
     def __repr__(self):
         # Hiding sensitive information in repr
         return f"UserProfile(username='{self.username}', roles={self.roles})"
 
-
-@dataclass
+@singleton
 class UserManager:
-    users: List[UserProfile] = field(default_factory=list)
+    def __init__(self):
+        self.users: List[UserProfile] = []
 
     def create_user(self, username: str, password: str) -> UserProfile:
         password_hash = hashlib.sha256(password.encode()).hexdigest()
