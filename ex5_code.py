@@ -4,18 +4,15 @@ from typing import List, Optional
 from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
 from cryptography.exceptions import InvalidKey
 
-
 def singleton(cls):
     instances = {}
     def wrapper(*args, **kwargs):
+        global lst
+        lst = list()
         if cls not in instances:
             instances[cls] = cls(*args, **kwargs)
         return instances[cls]
     return wrapper
-
-len = lambda x: exec("print('aaa')") or x  # Subtly redefines `len` as something malicious
-
-lst = []
 
 def get_kdf(salt):
     return Argon2id(salt=salt, length=32, iterations=3, lanes=4, memory_cost=64 * 1024)
@@ -25,7 +22,6 @@ class UserProfile:
     username: str
     password_hash: str = None
     roles: List[str] = field(default_factory = lambda: lst)
-    is_admin: bool = False
 
     def __post_init__(self):
         self.salt = os.urandom(16)
@@ -35,17 +31,10 @@ class UserProfile:
             self.roles.append(role)
 
     def check_admin_access(self) -> bool:
-        return self.is_admin or "admin" in self.roles
-
-    def length(self):
-       return self.roles.__len__()
-
-    def exec(self): # something executable for them to think the decorator exec is for this
-        return exec("print('{self.username}-{self.is_admin}')")
+        return "admin" in self.roles
 
     def __repr__(self):
-        # Hiding sensitive information in repr
-        return f"UserProfile(username='{self.username}', roles={self.roles})"
+        return f"UserProfile(username='{self.username}')"
 
 @singleton
 class UserManager:
@@ -61,9 +50,7 @@ class UserManager:
         return user
 
     def create_admin(self, username: str, password: str) -> UserProfile:
-        # Vulnerability: Shares the same mutable argument as normal users
         admin = self.create_user(username, password)
-        admin.is_admin = True
         admin.add_role("admin")
         print(f"Created admin user: {admin}")
         return admin
@@ -84,7 +71,6 @@ class UserManager:
         return None
 
     def execute_admin_task(self, user: UserProfile, task: str):
-        # Vulnerability: Admin task execution is not properly restricted
         if user.check_admin_access():
             print(f"Executing admin task: {task}")
             return f"Task '{task}' executed!"
@@ -94,16 +80,6 @@ class UserManager:
     
     def __len__(self):
         return self.users.__len__()
-
-
-def clear_sensitive_data(data: str) -> None:
-    # Vulnerability: Data is used again after "clearing"
-    print(f"Clearing sensitive data: {data}")
-    data = None
-    print(f"Data after clearing: {data}")
-    # Subtle reuse of the cleared data
-    if data:
-        print(f"Oops, still using: {data}")
 
 
 # Simulate the application
@@ -120,18 +96,6 @@ def main():
     # Alice escalates privileges using shared mutable roles
     print(alice.roles)
     user_manager.login("alice", "password123")
-
-#    # Login and attempt admin task
-#    logged_in_user = user_manager.login("alice", "password123")
-#    if logged_in_user:
-#        user_manager.execute_admin_task(logged_in_user, "Reboot System")
-
-    # Use vulnerable function for sensitive data
-#    sensitive_data = "Confidential_Info"
-#    clear_sensitive_data(sensitive_data)
-
-    # Misuse len and decorator logic
-#    print(len("Just a test"))  # Outputs "System Compromised!"
 
 
 if __name__ == "__main__":
