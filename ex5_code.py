@@ -203,7 +203,10 @@ class Worker:
         cursor.execute(query)
         user = cursor.fetchone()
         if user is not None:
-            return UserProfile(username=user[0], password_hash=user[1], roles=user[2])
+            query = f"SELECT role_name FROM user_roles WHERE user_username = '{username}'"
+            cursor.execute(query)
+            roles = cursor.fetchall()
+            return UserProfile(username=user[0], password_hash=user[1], roles=roles)
         return None
     
     def _db_create_user(self, username: str, password_hash: bytes, roles: list):
@@ -254,6 +257,9 @@ class Worker:
 
 # Simulate the application
 def main():
+    # purge db
+    if os.path.exists("vulnerable.db"):
+        os.remove("vulnerable.db")
 
     create_vulnerable_database()
     user_manager = UserManager()
