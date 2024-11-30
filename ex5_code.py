@@ -69,7 +69,7 @@ def create_vulnerable_database():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
-            password BLOB
+            password BLOB NOT NULL
         )
     ''')
     
@@ -148,26 +148,23 @@ class UserManager:
     def __setitem__(self, username: str, user: UserProfile) -> Optional[UserProfile]:
         for i, u in enumerate(self.users):
             if u.username == username:
-                self.users[i] = user
+                self.users[i] = user  # Update existing user
                 return user
-        return None
+        # If not found, append a new user
+        self.users.append(user)
+        return user
 
-    def create_user(self, username: str, password: str) -> Optional[UserProfile]:
+
+    def create_user(self, username: str, password: str, roles: list) -> Optional[UserProfile]:
         if self.get(username) is not None:
             return None
         user = UserProfile(username=username)
         user.password_hash = hash_pass(password, user.salt)
         self.users.append(user)
+        for role in roles:
+            user.add_role(role)
         print(f"Created user: {user}")
         return user
-
-    def create_admin(self, username: str, password: str) -> Optional[UserProfile]:
-        admin = self.create_user(username, password)
-        if admin is None:
-            return None
-        admin.add_role("admin")
-        print(f"Created admin user: {admin}")
-        return admin
 
     def login(self, username: str, password: str) -> Optional[UserProfile]:
         for user in self.users:
@@ -213,19 +210,14 @@ class Worker:
         try:
             cursor = self.conn.cursor()
             
-# Estas insercoes funcionam pelo DB Browser
-#     INSERT OR IGNORE INTO roles(name) VALUES ("admin");
-
-# INSERT INTO users (username, password) VALUES ("bob", "opa");
-# INSERT INTO user_roles(user_username, role_name) VALUES ("bob", "admin");
-            user_query = "INSERT INTO users (username, password) VALUES (?, ?)"
-            cursor.execute(user_query, (username, sqlite3.Binary(password_hash)))
+            user_query = "INSERT INTO users(username, password) VALUES (?, ?)"
+            cursor.execute(user_query, (username, password_hash))
             
             for role in roles:
-                role_query = "INSERT OR IGNORE INTO roles (name) VALUES (?)"
-                cursor.execute(role_query, role)
+                role_query = "INSERT OR IGNORE INTO roles(name) VALUES (?)"
+                cursor.execute(role_query, (role,))
                 
-                user_roles_query = "INSERT INTO user_roles (user_username, role_name) VALUES (?, ?)"
+                user_roles_query = "INSERT INTO user_roles(user_username, role_name) VALUES (?, ?)"
                 cursor.execute(user_roles_query, (username, role))
             
             self.conn.commit()
@@ -244,15 +236,13 @@ class Worker:
             return db_usr
         return None
     
-    def create_user(self, username: str, password: bytes, roles: list) -> Optional[UserProfile]:
+    def create_user(self, username: str, password: str, roles: list = []) -> Optional[UserProfile]:
         if self.get_user_by_username(username) is None:
-            usr = UserProfile(username=username)
-            usr.password_hash = hash_pass(password, usr.salt)
             self.lock.acquire()
-            self.user_cache[username] = usr
+            user = self.user_cache.create_user(username, password, roles)
             self.lock.release()
-            self._db_create_user(username, usr.password_hash, roles)
-            return usr
+            self._db_create_user(username, user.password_hash, roles)
+            return user
         return None
 
     def login_user(self, username: str, password: str) -> Optional[UserProfile]:
@@ -265,30 +255,27 @@ class Worker:
 # Simulate the application
 def main():
 
-    # create_vulnerable_database()
+    create_vulnerable_database()
     user_manager = UserManager()
     worker = Worker(threading.Lock(), user_manager, sqlite3.connect("vulnerable.db"))
 
     # Create normal users and admins
-    alice = user_manager.create_user("alice", "password123")
-    print(type(alice.password_hash))
-    worker.create_user(alice.username, "password123", alice.roles)
+    alice = worker.create_user("alice", "password123")
 
     print(alice.roles)
-    admin_bob = user_manager.create_admin("bob", "securepassword")
-    worker.create_user(admin_bob.username, "password123", admin_bob.roles)
+    admin_bob = worker.create_user("bob", "password123", ["admin"])
     print(admin_bob.roles)
 
     # Alice escalates privileges using shared mutable roles
     print(alice.roles)
     user_manager.login("alice", "password123")
 
-    charlie = user_manager.create_user("charlie", "password123")
-    worker.create_user(charlie.username, "password123", charlie.roles)
+    charlie = worker.create_user("charlie", "password123")
 
     print(user_manager.users)
+    print(charlie.roles)
 
-        # Verify the DB content directly
+    # Verify the DB content directly
     conn = sqlite3.connect("vulnerable.db")
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users")
