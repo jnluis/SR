@@ -2,8 +2,8 @@ import hashlib
 from dataclasses import dataclass, field
 import multiprocessing.synchronize
 from typing import List, Optional
-import multiprocessing
-import mysql
+import threading
+import sqlite3
 
 user_cache = {}
 
@@ -94,7 +94,7 @@ def clear_sensitive_data(data: str) -> None:
         print(f"Oops, still using: {data}")
 
 class Worker:
-    def __init__(self, lock: multiprocessing.synchronize.Lock, user_cache: dict, db_conn: mysql.connector.MySQLConnection):
+    def __init__(self, lock: threading.Lock, user_cache: dict, db_conn: sqlite3.connector.Connection):
         self.lock = lock
         self.user_cache = user_cache
         self.conn = db_conn
@@ -126,13 +126,22 @@ class Worker:
             return db_usr
         return None
     
-    def create_user(self, username: str, password: str) -> UserProfile:
-        self._db_create_user(username, hashlib.sha256(password.encode()).hexdigest())
-        usr = UserProfile(username=username, password_hash=hashlib.sha256(password.encode()).hexdigest())
-        self.lock.acquire()
-        self.user_cache[username] = usr
-        self.lock.release()
-        return usr
+    def create_user(self, username: str, password: str) -> Optional[UserProfile]:
+        if self.get_user_by_username(username) is None:
+            usr = UserProfile(username=username, password_hash=hashlib.sha256(password.encode()).hexdigest())
+            self.lock.acquire()
+            self.user_cache[username] = usr
+            self.lock.release()
+            self._db_create_user(username, hashlib.sha256(password.encode()).hexdigest())
+            return usr
+        return None
+
+    def login_user(self, username: str, password: str) -> Optional[UserProfile]:
+        user = self.get_user_by_username(username)
+        if user is not None and user.password_hash == hashlib.sha256(password.encode()).hexdigest():
+            return user
+        return None
+
 
 # Simulate the application
 def main():
