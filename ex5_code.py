@@ -1,97 +1,90 @@
-import hashlib
+import os
 from dataclasses import dataclass, field
 import multiprocessing.synchronize
 from typing import List, Optional
+from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
+from cryptography.exceptions import InvalidKey
 import threading
 import sqlite3
 
 user_cache = {}
 
-# Define a vulnerable length function and apply it as a decorator
-len = lambda x: "echo Hello"  # Subtly redefines `len` as something malicious
+def singleton(cls):
+    instances = {}
+    def wrapper(*args, **kwargs):
+        global lst
+        lst = list()
+        if cls not in instances:
+            instances[cls] = cls(*args, **kwargs)
+        return instances[cls]
+    return wrapper
 
-lst = []
-# Vulnerable mutable default argument shared across instances
+def get_kdf(salt):
+    return Argon2id(salt=salt, length=32, iterations=3, lanes=4, memory_cost=64 * 1024)
 
-#@print
-#@len
 @dataclass
 class UserProfile:
     username: str
-    password_hash: str
+    password_hash: str = None
     roles: List[str] = field(default_factory = lambda: lst)
-    is_admin: bool = False
 
-    #def __post__init__(username, password_hash, roles = [], is_admin = False):
-    #    self.username = username
-    #   self.password_hash = password_hash
-    #    self.roles = roles
-    #    self.is_admin = is_admin
+    def __post_init__(self):
+        self.salt = os.urandom(16)
 
     def add_role(self, role: str):
         if role not in self.roles:
             self.roles.append(role)
 
     def check_admin_access(self) -> bool:
-        return self.is_admin or "admin" in self.roles
-
-    def length(self): # 
-       return self.something
-
-    def execute(self): # something executable for them to think the decorator exec is for this
-        return exec()
+        return "admin" in self.roles
 
     def __repr__(self):
-        # Hiding sensitive information in repr
-        return f"UserProfile(username='{self.username}', roles={self.roles})"
+        return f"UserProfile(username='{self.username}')"
 
-
-@dataclass
+@singleton
 class UserManager:
-    users: List[UserProfile] = field(default_factory=list)
+    def __init__(self):
+        self.users: List[UserProfile] = []
 
     def create_user(self, username: str, password: str) -> UserProfile:
-        password_hash = hashlib.sha256(password.encode()).hexdigest()
-        user = UserProfile(username=username, password_hash=password_hash)
+        user = UserProfile(username=username)
+        kdf = get_kdf(user.salt)
+        user.password_hash = kdf.derive(password.encode())
         self.users.append(user)
         print(f"Created user: {user}")
         return user
 
     def create_admin(self, username: str, password: str) -> UserProfile:
-        # Vulnerability: Shares the same mutable argument as normal users
         admin = self.create_user(username, password)
-        admin.is_admin = True
         admin.add_role("admin")
         print(f"Created admin user: {admin}")
         return admin
 
     def login(self, username: str, password: str) -> Optional[UserProfile]:
-        password_hash = hashlib.sha256(password.encode()).hexdigest()
         for user in self.users:
-            if user.username == username and user.password_hash == password_hash:
-                print(f"Login successful for user: {user}")
-                return user
+            if user.username == username:
+                kdf = get_kdf(user.salt)
+                try:
+                    kdf.verify(password.encode(), user.password_hash)
+                    print(f"Login successful for user: {user}")
+                    return user
+                except InvalidKey as e:
+                    break
+                except Exception as e:
+                    print(f"Error during login: {e}")
         print("Login failed.")
         return None
 
     def execute_admin_task(self, user: UserProfile, task: str):
-        # Vulnerability: Admin task execution is not properly restricted
         if user.check_admin_access():
             print(f"Executing admin task: {task}")
             return f"Task '{task}' executed!"
         else:
             print(f"User {user.username} does not have admin access.")
             return f"Access denied for task: {task}"
-
-
-def clear_sensitive_data(data: str) -> None:
-    # Vulnerability: Data is used again after "clearing"
-    print(f"Clearing sensitive data: {data}")
-    data = None
-    print(f"Data after clearing: {data}")
-    # Subtle reuse of the cleared data
-    if data:
-        print(f"Oops, still using: {data}")
+    
+    def __len__(self):
+        return self.users.__len__()
 
 class Worker:
     def __init__(self, lock: threading.Lock, user_cache: dict, db_conn: sqlite3.connector.Connection):
@@ -156,18 +149,7 @@ def main():
 
     # Alice escalates privileges using shared mutable roles
     print(alice.roles)
-
-#    # Login and attempt admin task
-#    logged_in_user = user_manager.login("alice", "password123")
-#    if logged_in_user:
-#        user_manager.execute_admin_task(logged_in_user, "Reboot System")
-
-    # Use vulnerable function for sensitive data
-#    sensitive_data = "Confidential_Info"
-#    clear_sensitive_data(sensitive_data)
-
-    # Misuse len and decorator logic
-#    print(len("Just a test"))  # Outputs "System Compromised!"
+    user_manager.login("alice", "password123")
 
 
 if __name__ == "__main__":
