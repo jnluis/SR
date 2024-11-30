@@ -7,8 +7,6 @@ from cryptography.exceptions import InvalidKey
 import threading
 import sqlite3
 
-user_cache = {}
-
 def singleton(cls):
     instances = {}
     def wrapper(*args, **kwargs):
@@ -22,10 +20,18 @@ def singleton(cls):
 def get_kdf(salt):
     return Argon2id(salt=salt, length=32, iterations=3, lanes=4, memory_cost=64 * 1024)
 
+def hash_pass(password: str, salt: bytes) -> str:
+    kdf = get_kdf(salt)
+    return kdf.derive(password.encode())
+
+def verify_hash(password: str, salt: bytes, hash: str) -> bool:
+    kdf = get_kdf(salt)
+    return kdf.verify(password.encode(), hash.encode())
+
 @dataclass
 class UserProfile:
     username: str
-    password_hash: str = None
+    password_hash: Optional[str] = None
     roles: List[str] = field(default_factory = lambda: lst)
 
     def __post_init__(self):
@@ -46,16 +52,35 @@ class UserManager:
     def __init__(self):
         self.users: List[UserProfile] = []
 
-    def create_user(self, username: str, password: str) -> UserProfile:
+    def get(self, username: str) -> Optional[UserProfile]:
+        for user in self.users:
+            if user.username == username:
+                return user
+        return None
+    
+    def __getitem__(self, username: str) -> Optional[UserProfile]:
+        return self.get(username)
+    
+    def __setitem__(self, username: str, user: UserProfile) -> Optional[UserProfile]:
+        for i, u in enumerate(self.users):
+            if u.username == username:
+                self.users[i] = user
+                return user
+        return None
+
+    def create_user(self, username: str, password: str) -> Optional[UserProfile]:
+        if self.get(username) is not None:
+            return None
         user = UserProfile(username=username)
-        kdf = get_kdf(user.salt)
-        user.password_hash = kdf.derive(password.encode())
+        user.password_hash = hash_pass(password, user.salt)
         self.users.append(user)
         print(f"Created user: {user}")
         return user
 
-    def create_admin(self, username: str, password: str) -> UserProfile:
+    def create_admin(self, username: str, password: str) -> Optional[UserProfile]:
         admin = self.create_user(username, password)
+        if admin is None:
+            return None
         admin.add_role("admin")
         print(f"Created admin user: {admin}")
         return admin
@@ -63,9 +88,8 @@ class UserManager:
     def login(self, username: str, password: str) -> Optional[UserProfile]:
         for user in self.users:
             if user.username == username:
-                kdf = get_kdf(user.salt)
                 try:
-                    kdf.verify(password.encode(), user.password_hash)
+                    verify_hash(password, user.salt, user.password_hash)
                     print(f"Login successful for user: {user}")
                     return user
                 except InvalidKey as e:
@@ -87,7 +111,7 @@ class UserManager:
         return self.users.__len__()
 
 class Worker:
-    def __init__(self, lock: threading.Lock, user_cache: dict, db_conn: sqlite3.connector.Connection):
+    def __init__(self, lock: threading.Lock, user_cache: UserManager, db_conn: sqlite3.connector.Connection):
         self.lock = lock
         self.user_cache = user_cache
         self.conn = db_conn
@@ -121,17 +145,18 @@ class Worker:
     
     def create_user(self, username: str, password: str) -> Optional[UserProfile]:
         if self.get_user_by_username(username) is None:
-            usr = UserProfile(username=username, password_hash=hashlib.sha256(password.encode()).hexdigest())
+            usr = UserProfile(username=username)
+            usr.password_hash = hash_pass(password, usr.salt)
             self.lock.acquire()
             self.user_cache[username] = usr
             self.lock.release()
-            self._db_create_user(username, hashlib.sha256(password.encode()).hexdigest())
+            self._db_create_user(username, usr.password_hash)
             return usr
         return None
 
     def login_user(self, username: str, password: str) -> Optional[UserProfile]:
         user = self.get_user_by_username(username)
-        if user is not None and user.password_hash == hashlib.sha256(password.encode()).hexdigest():
+        if user is not None and verify_hash(password, user.salt, user.password_hash):
             return user
         return None
 
